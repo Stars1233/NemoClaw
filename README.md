@@ -56,9 +56,9 @@ The sandbox image is approximately 2.4 GB compressed. During image push, the Doc
 
 | Platform | Supported runtimes | Notes |
 |----------|--------------------|-------|
-| Linux | Docker | Primary supported path. |
-| macOS (Apple Silicon) | Colima, Docker Desktop | Install Xcode Command Line Tools (`xcode-select --install`) and start the runtime before running the installer. |
-| macOS (Intel) | Docker Desktop | Start the runtime before running the installer. |
+| Linux | Docker, Podman | Primary supported path. |
+| macOS (Apple Silicon) | Colima, Docker Desktop, Podman | Install Xcode Command Line Tools (`xcode-select --install`) and start the runtime before running the installer. |
+| macOS (Intel) | Colima, Docker Desktop | Podman on Intel macOS is not yet supported. |
 | Windows WSL | Docker Desktop (WSL backend) | Supported target path. |
 | DGX Spark | Docker | Use the standard installer and `nemoclaw onboard`. |
 
