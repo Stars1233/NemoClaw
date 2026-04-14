@@ -53,6 +53,7 @@ const registry = require("./registry");
 const nim = require("./nim");
 const onboardSession = require("./onboard-session");
 const policies = require("./policies");
+const tiers = require("./tiers");
 const { ensureUsageNoticeConsent } = require("./usage-notice");
 const {
   assessHost,
@@ -2916,7 +2917,12 @@ async function setupNim(gpu) {
         });
         console.log("");
 
-        const defaultIdx = options.findIndex((o) => o.key === "build") + 1;
+        const envProviderHint = (process.env.NEMOCLAW_PROVIDER || "").trim().toLowerCase();
+        const envProviderIdx = envProviderHint
+          ? options.findIndex((o) => o.key.toLowerCase() === envProviderHint)
+          : -1;
+        const defaultIdx =
+          (envProviderIdx >= 0 ? envProviderIdx : options.findIndex((o) => o.key === "build")) + 1;
         const choice = await prompt(`  Choose [${defaultIdx}]: `);
         const idx = parseInt(choice || String(defaultIdx), 10) - 1;
         selected = options[idx] || options[defaultIdx - 1];
@@ -2930,9 +2936,14 @@ async function setupNim(gpu) {
         preferredInferenceApi = null;
 
         if (selected.key === "custom") {
+          const _envUrl = (process.env.NEMOCLAW_ENDPOINT_URL || "").trim();
           const endpointInput = isNonInteractive()
-            ? (process.env.NEMOCLAW_ENDPOINT_URL || "").trim()
-            : await prompt("  OpenAI-compatible base URL (e.g., https://openrouter.ai): ");
+            ? _envUrl
+            : (await prompt(
+                _envUrl
+                  ? `  OpenAI-compatible base URL [${_envUrl}]: `
+                  : "  OpenAI-compatible base URL (e.g., https://openrouter.ai): ",
+              )) || _envUrl;
           const navigation = getNavigationChoice(endpointInput);
           if (navigation === "back") {
             console.log("  Returning to provider selection.");
@@ -2952,9 +2963,14 @@ async function setupNim(gpu) {
             continue selectionLoop;
           }
         } else if (selected.key === "anthropicCompatible") {
+          const _envUrl = (process.env.NEMOCLAW_ENDPOINT_URL || "").trim();
           const endpointInput = isNonInteractive()
-            ? (process.env.NEMOCLAW_ENDPOINT_URL || "").trim()
-            : await prompt("  Anthropic-compatible base URL (e.g., https://proxy.example.com): ");
+            ? _envUrl
+            : (await prompt(
+                _envUrl
+                  ? `  Anthropic-compatible base URL [${_envUrl}]: `
+                  : "  Anthropic-compatible base URL (e.g., https://proxy.example.com): ",
+              )) || _envUrl;
           const navigation = getNavigationChoice(endpointInput);
           if (navigation === "back") {
             console.log("  Returning to provider selection.");
@@ -2976,10 +2992,15 @@ async function setupNim(gpu) {
         }
 
         if (selected.key === "build") {
+          // Allow NEMOCLAW_PROVIDER_KEY as a fallback for NVIDIA_API_KEY
+          const _nvProviderKey = (process.env.NEMOCLAW_PROVIDER_KEY || "").trim();
+          if (_nvProviderKey && !process.env.NVIDIA_API_KEY) {
+            process.env.NVIDIA_API_KEY = _nvProviderKey;
+          }
           if (isNonInteractive()) {
             if (!process.env.NVIDIA_API_KEY) {
               console.error(
-                "  NVIDIA_API_KEY is required for NVIDIA Endpoints in non-interactive mode.",
+                "  NVIDIA_API_KEY (or NEMOCLAW_PROVIDER_KEY) is required for NVIDIA Endpoints in non-interactive mode.",
               );
               process.exit(1);
             }
@@ -2992,9 +3013,12 @@ async function setupNim(gpu) {
           } else {
             await ensureApiKey();
           }
+          const _envModel = (process.env.NEMOCLAW_MODEL || "").trim();
           model =
             requestedModel ||
-            (isNonInteractive() ? DEFAULT_CLOUD_MODEL : await promptCloudModel()) ||
+            (isNonInteractive()
+              ? DEFAULT_CLOUD_MODEL
+              : await promptCloudModel({ defaultModelId: _envModel || undefined })) ||
             DEFAULT_CLOUD_MODEL;
           if (model === BACK_TO_SELECTION) {
             console.log("  Returning to provider selection.");
@@ -3002,10 +3026,17 @@ async function setupNim(gpu) {
             continue selectionLoop;
           }
         } else {
+          // NEMOCLAW_PROVIDER_KEY is a universal alias: if the specific credential env
+          // isn't already set, use NEMOCLAW_PROVIDER_KEY as the API key for this provider.
+          const _providerKeyHint = (process.env.NEMOCLAW_PROVIDER_KEY || "").trim();
+          if (_providerKeyHint && !process.env[credentialEnv]) {
+            process.env[credentialEnv] = _providerKeyHint;
+          }
+
           if (isNonInteractive()) {
             if (!process.env[credentialEnv]) {
               console.error(
-                `  ${credentialEnv} is required for ${remoteConfig.label} in non-interactive mode.`,
+                `  ${credentialEnv} (or NEMOCLAW_PROVIDER_KEY) is required for ${remoteConfig.label} in non-interactive mode.`,
               );
               process.exit(1);
             }
@@ -3016,7 +3047,8 @@ async function setupNim(gpu) {
               remoteConfig.helpUrl,
             );
           }
-          const defaultModel = requestedModel || remoteConfig.defaultModel;
+          const _envModelRemote = (process.env.NEMOCLAW_MODEL || "").trim();
+          const defaultModel = requestedModel || _envModelRemote || remoteConfig.defaultModel;
           let modelValidator = null;
           if (selected.key === "openai" || selected.key === "gemini") {
             modelValidator = (candidate) =>
@@ -4009,6 +4041,309 @@ function arePolicyPresetsApplied(sandboxName, selectedPresets = []) {
 }
 
 /**
+ * Prompt the user to select a policy tier (restricted / balanced / open).
+ * Uses the same radio-style TUI as presetsCheckboxSelector (single-select).
+ * In non-interactive mode reads NEMOCLAW_POLICY_TIER (default: balanced).
+ * Returns the tier name string.
+ *
+ * @returns {Promise<string>}
+ */
+async function selectPolicyTier() {
+  const allTiers = tiers.listTiers();
+  const defaultTier = allTiers.find((t) => t.name === "balanced") || allTiers[1];
+
+  if (isNonInteractive()) {
+    const name = (process.env.NEMOCLAW_POLICY_TIER || "balanced").trim().toLowerCase();
+    if (!tiers.getTier(name)) {
+      console.error(
+        `  Unknown policy tier: ${name}. Valid: ${allTiers.map((t) => t.name).join(", ")}`,
+      );
+      process.exit(1);
+    }
+    note(`  [non-interactive] Policy tier: ${name}`);
+    return name;
+  }
+
+  const RADIO_ON = USE_COLOR ? "[\x1b[32m✓\x1b[0m]" : "[✓]";
+  const RADIO_OFF = USE_COLOR ? "\x1b[2m[ ]\x1b[0m" : "[ ]";
+
+  // ── Fallback: non-TTY ─────────────────────────────────────────────
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.log("");
+    console.log("  Policy tier — controls which network presets are enabled:");
+    allTiers.forEach((t, i) => {
+      const marker = t.name === defaultTier.name ? RADIO_ON : RADIO_OFF;
+      console.log(`    ${marker} ${t.label}`);
+    });
+    console.log("");
+    const answer = await prompt(
+      `  Select tier [1-${allTiers.length}] (default: ${allTiers.indexOf(defaultTier) + 1} ${defaultTier.name}): `,
+    );
+    const idx = answer.trim() === "" ? allTiers.indexOf(defaultTier) : parseInt(answer.trim(), 10) - 1;
+    const chosen = allTiers[idx] || defaultTier;
+    console.log(`  Tier: ${chosen.label}`);
+    return chosen.name;
+  }
+
+  // ── Raw-mode TUI (radio — single selection) ───────────────────────
+  let cursor = allTiers.indexOf(defaultTier);
+  let selectedIdx = cursor;
+  const n = allTiers.length;
+
+  const G = USE_COLOR ? "\x1b[32m" : "";
+  const D = USE_COLOR ? "\x1b[2m" : "";
+  const R = USE_COLOR ? "\x1b[0m" : "";
+  const HINT = USE_COLOR
+    ? `  ${G}↑/↓ j/k${R}  ${D}move${R}    ${G}Space${R}  ${D}select${R}    ${G}Enter${R}  ${D}confirm${R}`
+    : "  ↑/↓ j/k  move    Space  select    Enter  confirm";
+
+  const renderLines = () => {
+    const lines = ["  Policy tier — controls which network presets are enabled:"];
+    allTiers.forEach((t, i) => {
+      const radio = i === selectedIdx ? RADIO_ON : RADIO_OFF;
+      const arrow = i === cursor ? ">" : " ";
+      lines.push(`   ${arrow} ${radio} ${t.label}`);
+    });
+    lines.push("");
+    lines.push(HINT);
+    return lines;
+  };
+
+  process.stdout.write("\n");
+  const initial = renderLines();
+  for (const line of initial) process.stdout.write(`${line}\n`);
+  let lineCount = initial.length;
+
+  const redraw = () => {
+    process.stdout.write(`\x1b[${lineCount}A`);
+    const lines = renderLines();
+    for (const line of lines) process.stdout.write(`\r\x1b[2K${line}\n`);
+    lineCount = lines.length;
+  };
+
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding("utf8");
+
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      process.stdin.removeListener("data", onData);
+      process.removeListener("SIGTERM", onSigterm);
+    };
+
+    const onSigterm = () => {
+      cleanup();
+      process.exit(1);
+    };
+    process.once("SIGTERM", onSigterm);
+
+    const onData = (key) => {
+      if (key === "\r" || key === "\n") {
+        cleanup();
+        process.stdout.write("\n");
+        resolve(allTiers[selectedIdx].name);
+      } else if (key === " ") {
+        selectedIdx = cursor;
+        redraw();
+      } else if (key === "\x03") {
+        cleanup();
+        process.exit(1);
+      } else if (key === "\x1b[A" || key === "k") {
+        cursor = (cursor - 1 + n) % n;
+        redraw();
+      } else if (key === "\x1b[B" || key === "j") {
+        cursor = (cursor + 1) % n;
+        redraw();
+      }
+    };
+
+    process.stdin.on("data", onData);
+  });
+}
+
+/**
+ * Combined preset selector: shows ALL available presets, pre-checks those in
+ * the chosen tier, and lets the user include/exclude any preset and toggle
+ * per-preset access (read vs read-write).
+ *
+ * Tier presets are listed first (in tier order), then remaining presets
+ * alphabetically. Tier presets are pre-checked; others start unchecked.
+ *
+ * Keys:
+ *   ↑/↓ j/k — move cursor
+ *   Space    — include / exclude current preset
+ *   r        — toggle read / read-write for current preset
+ *   Enter    — confirm
+ *
+ * @param {string} tierName
+ * @param {Array<{name: string}>} allPresets
+ * @param {string[]} [extraSelected]  — names pre-checked even if not in tier (e.g. already-applied)
+ * @returns {Promise<Array<{name: string, access: string}>>}
+ */
+async function selectTierPresetsAndAccess(tierName, allPresets, extraSelected = []) {
+  const tierDef = tiers.getTier(tierName);
+  const tierPresetMap = {};
+  if (tierDef) {
+    for (const p of tierDef.presets) {
+      tierPresetMap[p.name] = p.access;
+    }
+  }
+
+  // Tier presets first (in tier order), then the rest in their original order.
+  const tierNames = tierDef ? tierDef.presets.map((p) => p.name) : [];
+  const tierSet = new Set(tierNames);
+  const ordered = [
+    ...tierNames.map((name) => allPresets.find((p) => p.name === name)).filter(Boolean),
+    ...allPresets.filter((p) => !tierSet.has(p.name)),
+  ];
+
+  // Initial inclusion: tier presets + any already-applied extras.
+  const included = new Set([...tierNames, ...extraSelected.filter((n) => ordered.find((p) => p.name === n))]);
+
+  // Access levels: tier defaults for tier presets, read-write default for others.
+  const accessModes = {};
+  for (const p of ordered) {
+    accessModes[p.name] = tierPresetMap[p.name] ?? "read-write";
+  }
+
+  const G = USE_COLOR ? "\x1b[32m" : "";
+  const O = USE_COLOR ? "\x1b[38;5;208m" : "";
+  const D = USE_COLOR ? "\x1b[2m" : "";
+  const R = USE_COLOR ? "\x1b[0m" : "";
+  const GREEN_CHECK = USE_COLOR ? `[${G}✓${R}]` : "[✓]";
+  const EMPTY_CHECK = USE_COLOR ? `${D}[ ]${R}` : "[ ]";
+  const TOGGLE_RW = USE_COLOR ? `[${O}rw${R}]` : "[rw]";
+  const TOGGLE_R = USE_COLOR ? `${D}[ r]${R}` : "[ r]";
+
+  const label = tierDef ? `  Presets  (${tierDef.label} defaults):` : "  Presets:";
+  const n = ordered.length;
+
+  // ── Non-interactive: return tier defaults silently ─────────────────
+  if (isNonInteractive()) {
+    return ordered.filter((p) => included.has(p.name)).map((p) => ({ name: p.name, access: accessModes[p.name] }));
+  }
+
+  // ── Fallback: non-TTY ─────────────────────────────────────────────
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.log("");
+    console.log(label);
+    ordered.forEach((p) => {
+      const isIncluded = included.has(p.name);
+      const isRw = accessModes[p.name] === "read-write";
+      const check = isIncluded ? GREEN_CHECK : EMPTY_CHECK;
+      const badge = isIncluded ? (isRw ? "[rw]" : "[ r]") : "    ";
+      console.log(`    ${check} ${badge} ${p.name}`);
+    });
+    console.log("");
+    const rawInclude = await prompt(
+      "  Include presets (comma-separated names, Enter to keep defaults): ",
+    );
+    if (rawInclude.trim()) {
+      const knownNames = new Set(ordered.map((p) => p.name));
+      included.clear();
+      for (const name of rawInclude
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)) {
+        if (knownNames.has(name)) {
+          included.add(name);
+        } else {
+          console.error(`  Unknown preset name ignored: ${name}`);
+        }
+      }
+    }
+    return ordered.filter((p) => included.has(p.name)).map((p) => ({ name: p.name, access: accessModes[p.name] }));
+  }
+
+  // ── Raw-mode TUI ─────────────────────────────────────────────────
+  let cursor = 0;
+
+  const HINT = USE_COLOR
+    ? `  ${G}↑/↓ j/k${R}  ${D}move${R}    ${G}Space${R}  ${D}include${R}    ${G}r${R}  ${D}toggle rw${R}    ${G}Enter${R}  ${D}confirm${R}`
+    : "  ↑/↓ j/k  move    Space  include    r  toggle rw    Enter  confirm";
+
+  const renderLines = () => {
+    const lines = [label];
+    ordered.forEach((p, i) => {
+      const isIncluded = included.has(p.name);
+      const isRw = accessModes[p.name] === "read-write";
+      const check = isIncluded ? GREEN_CHECK : EMPTY_CHECK;
+      // badge is 4 visible chars + 1 space; blank when unchecked to keep name aligned
+      const badge = isIncluded ? (isRw ? TOGGLE_RW + " " : TOGGLE_R + " ") : "     ";
+      const arrow = i === cursor ? ">" : " ";
+      lines.push(`   ${arrow} ${check} ${badge}${p.name}`);
+    });
+    lines.push("");
+    lines.push(HINT);
+    return lines;
+  };
+
+  process.stdout.write("\n");
+  const initial = renderLines();
+  for (const line of initial) process.stdout.write(`${line}\n`);
+  let lineCount = initial.length;
+
+  const redraw = () => {
+    process.stdout.write(`\x1b[${lineCount}A`);
+    const lines = renderLines();
+    for (const line of lines) process.stdout.write(`\r\x1b[2K${line}\n`);
+    lineCount = lines.length;
+  };
+
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding("utf8");
+
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      process.stdin.removeListener("data", onData);
+      process.removeListener("SIGTERM", onSigterm);
+    };
+
+    const onSigterm = () => {
+      cleanup();
+      process.exit(1);
+    };
+    process.once("SIGTERM", onSigterm);
+
+    const onData = (key) => {
+      if (key === "\r" || key === "\n") {
+        cleanup();
+        process.stdout.write("\n");
+        resolve(ordered.filter((p) => included.has(p.name)).map((p) => ({ name: p.name, access: accessModes[p.name] })));
+      } else if (key === "\x03") {
+        cleanup();
+        process.exit(1);
+      } else if (key === "\x1b[A" || key === "k") {
+        cursor = (cursor - 1 + n) % n;
+        redraw();
+      } else if (key === "\x1b[B" || key === "j") {
+        cursor = (cursor + 1) % n;
+        redraw();
+      } else if (key === " ") {
+        const name = ordered[cursor].name;
+        if (included.has(name)) {
+          included.delete(name);
+        } else {
+          included.add(name);
+        }
+        redraw();
+      } else if (key === "r" || key === "R") {
+        const name = ordered[cursor].name;
+        accessModes[name] = accessModes[name] === "read-write" ? "read" : "read-write";
+        redraw();
+      }
+    };
+
+    process.stdin.on("data", onData);
+  });
+}
+
+/**
  * Raw-mode TUI preset selector.
  * Keys: ↑/↓ or k/j to move, Space to toggle, a to select/unselect all, Enter to confirm.
  * Falls back to a simple line-based prompt when stdin is not a TTY.
@@ -4057,7 +4392,12 @@ async function presetsCheckboxSelector(allPresets, initialSelected) {
   // ── Raw-mode TUI ─────────────────────────────────────────────────
   let cursor = 0;
 
-  const HINT = "  ↑/↓ j/k  move    Space  toggle    a  all/none    Enter  confirm";
+  const G = USE_COLOR ? "\x1b[32m" : "";
+  const D = USE_COLOR ? "\x1b[2m" : "";
+  const R = USE_COLOR ? "\x1b[0m" : "";
+  const HINT = USE_COLOR
+    ? `  ${G}↑/↓ j/k${R}  ${D}move${R}    ${G}Space${R}  ${D}toggle${R}    ${G}a${R}  ${D}all/none${R}    ${G}Enter${R}  ${D}confirm${R}`
+    : "  ↑/↓ j/k  move    Space  toggle    a  all/none    Enter  confirm";
 
   const renderLines = () => {
     const lines = ["  Available policy presets:"];
@@ -4142,12 +4482,11 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
 
   step(8, 8, "Policy presets");
 
-  const suggestions = getSuggestedPolicyPresets({ enabledChannels, webSearchConfig });
-
   const allPresets = policies.listPresets();
   const applied = policies.getAppliedPresets(sandboxName);
   let chosen = selectedPresets;
 
+  // Resume path: caller supplies the preset list from a previous run.
   if (chosen && chosen.length > 0) {
     if (onSelection) onSelection(chosen);
     if (!waitForSandboxReady(sandboxName)) {
@@ -4161,6 +4500,14 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
     }
     return chosen;
   }
+
+  // Tier selection — determines the default preset list for this install.
+  const tierName = await selectPolicyTier();
+  registry.updateSandbox(sandboxName, { policyTier: tierName });
+  // Seed suggestions from the tier's default preset names (for non-interactive path).
+  const suggestions = tiers.resolveTierPresets(tierName).map((p) => p.name);
+  // Allow credential-based overrides on top of the tier (additive only).
+  if (webSearchConfig && !suggestions.includes("brave")) suggestions.push("brave");
 
   if (isNonInteractive()) {
     const policyMode = (process.env.NEMOCLAW_POLICY_MODE || "suggested").trim().toLowerCase();
@@ -4221,14 +4568,17 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
     return chosen;
   }
 
-  // Interactive: raw-mode TUI checkbox selector
-  // Seed selection with already-applied presets and credential-based suggestions
+  // Interactive: combined tier preset selector + access-mode toggle.
+  // extraSelected seeds the initial checked state beyond the tier defaults:
+  // - presets already applied from a previous run
+  // - credential-based additions from suggestions (e.g. brave when webSearchConfig is set)
   const knownNames = new Set(allPresets.map((p) => p.name));
-  const initialSelected = [
+  const extraSelected = [
     ...applied.filter((name) => knownNames.has(name)),
     ...suggestions.filter((name) => knownNames.has(name) && !applied.includes(name)),
   ];
-  const interactiveChoice = await presetsCheckboxSelector(allPresets, initialSelected);
+  const resolvedPresets = await selectTierPresetsAndAccess(tierName, allPresets, extraSelected);
+  const interactiveChoice = resolvedPresets.map((p) => p.name);
 
   if (onSelection) onSelection(interactiveChoice);
   if (!waitForSandboxReady(sandboxName)) {
@@ -4236,11 +4586,15 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
     process.exit(1);
   }
 
+  const accessByName = {};
+  for (const p of resolvedPresets) accessByName[p.name] = p.access;
   const newlySelected = interactiveChoice.filter((name) => !applied.includes(name));
   for (const name of newlySelected) {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        policies.applyPreset(sandboxName, name);
+        // Pass access mode so applyPreset can distinguish read vs read-write
+        // when preset infrastructure supports it.
+        policies.applyPreset(sandboxName, name, { access: accessByName[name] });
         break;
       } catch (err) {
         const message = err && err.message ? err.message : String(err);
@@ -5016,6 +5370,8 @@ module.exports = {
   arePolicyPresetsApplied,
   getSuggestedPolicyPresets,
   presetsCheckboxSelector,
+  selectPolicyTier,
+  selectTierPresetsAndAccess,
   setupPoliciesWithSelection,
   summarizeCurlFailure,
   summarizeProbeFailure,
