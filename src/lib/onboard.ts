@@ -3003,6 +3003,8 @@ async function createSandbox(
   const effectiveAgent = agent || agentDefs.loadAgent("openclaw");
   registry.registerSandbox({
     name: sandboxName,
+    model: model || null,
+    provider: provider || null,
     gpuEnabled: !!gpu,
     agent: agent ? agent.name : null,
     agentVersion: fromDockerfile ? null : effectiveAgent.expectedVersion || null,
@@ -5392,7 +5394,7 @@ async function onboard(opts = {}) {
 
       startRecordedStep("inference", { sandboxName, provider, model });
       const inferenceResult = await setupInference(
-        GATEWAY_NAME,
+        sandboxName,
         model,
         provider,
         endpointUrl,
