@@ -6440,6 +6440,7 @@ function printDashboard(
   agent: AgentDefinition | null = null,
 ): void {
   const nimStat = nimContainer ? nim.nimStatusByName(nimContainer) : nim.nimStatus(sandboxName);
+  const showNim = nim.shouldShowNimLine(nimContainer, nimStat.running);
   const nimLabel = nimStat.running ? "running" : "not running";
 
   const providerLabel = getProviderLabel(provider);
@@ -6468,7 +6469,9 @@ function printDashboard(
   // console.log(`  Dashboard    http://localhost:${DASHBOARD_PORT}/`);
   console.log(`  Sandbox      ${sandboxName} (Landlock + seccomp + netns)`);
   console.log(`  Model        ${model} (${providerLabel})`);
-  console.log(`  NIM          ${nimLabel}`);
+  if (showNim) {
+    console.log(`  NIM          ${nimLabel}`);
+  }
   console.log(`  ${"─".repeat(50)}`);
   console.log(`  Run:         nemoclaw ${sandboxName} connect`);
   console.log(`  Status:      nemoclaw ${sandboxName} status`);
