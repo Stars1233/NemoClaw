@@ -187,8 +187,13 @@ function createDebugCommandTestEnv(prefix: string): Record<string, string> {
 
 describe("CLI dispatch", () => {
   it("config get validates flags and values before dispatch", () => {
-    const src = fs.readFileSync(path.join(import.meta.dirname, "..", "src", "nemoclaw.ts"), "utf-8");
-    const configGet = src.match(/case "get": \{([\s\S]*?)sandboxConfig\.configGet\(cmd, configOpts\);/);
+    const src = fs.readFileSync(
+      path.join(import.meta.dirname, "..", "src", "nemoclaw.ts"),
+      "utf-8",
+    );
+    const configGet = src.match(
+      /case "get": \{([\s\S]*?)sandboxConfig\.configGet\(cmd, configOpts\);/,
+    );
     expect(configGet).toBeTruthy();
     expect(configGet![1]).toContain("--key requires a value");
     expect(configGet![1]).toContain("--format requires a value");
@@ -233,6 +238,69 @@ describe("CLI dispatch", () => {
     const r = run("boguscmd boguscmd2");
     expect(r.code).toBe(1);
     expect(r.out.includes("Unknown command")).toBeTruthy();
+  });
+
+  it("suggests list for a mistyped list command", () => {
+    const r = run("liost");
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("Unknown command: liost");
+    expect(r.out).toContain("Did you mean: nemoclaw list?");
+  });
+
+  it("recovers a live sandbox before suggesting a bare command typo", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-recover-typo-"));
+    const localBin = path.join(home, "bin");
+    fs.mkdirSync(localBin, { recursive: true });
+    fs.writeFileSync(
+      path.join(localBin, "openshell"),
+      [
+        "#!/usr/bin/env bash",
+        'printf "%s\\n" "$*" >> "$HOME/openshell-calls.log"',
+        'case "$*" in',
+        '  "status") printf "Status: Connected\\nGateway: nemoclaw\\n"; exit 0 ;;',
+        '  "gateway info -g nemoclaw") printf "Gateway: nemoclaw\\n"; exit 0 ;;',
+        '  "sandbox list") echo "liost Ready"; exit 0 ;;',
+        '  "sandbox get liost") printf "Name: liost\\nPhase: Ready\\nPolicy:\\n"; exit 0 ;;',
+        '  "policy get --full liost") exit 1 ;;',
+        '  "inference get") exit 1 ;;',
+        '  "sandbox connect liost") echo "CONNECTED_LIOST"; exit 0 ;;',
+        "  *) exit 0 ;;",
+        "esac",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const r = runWithEnv("liost", {
+      HOME: home,
+      PATH: `${localBin}:${process.env.PATH || ""}`,
+      NEMOCLAW_CONNECT_TIMEOUT: "1",
+      NEMOCLAW_NO_CONNECT_HINT: "1",
+    });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("CONNECTED_LIOST");
+    expect(r.out).not.toContain("Unknown command: liost");
+  });
+
+  it("explains sandbox connect command order when the sandbox name is last", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-connect-order-"));
+    const localBin = path.join(home, "bin");
+    fs.mkdirSync(localBin, { recursive: true });
+    writeSandboxRegistry(home);
+    fs.writeFileSync(
+      path.join(localBin, "openshell"),
+      ["#!/usr/bin/env bash", "exit 1"].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const r = runWithEnv("hermes connect alpha", {
+      HOME: home,
+      PATH: `${localBin}:${process.env.PATH || ""}`,
+    });
+
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("Sandbox 'hermes' does not exist");
+    expect(r.out).toContain("Command order is: nemoclaw <sandbox-name> connect");
+    expect(r.out).toContain("Did you mean: nemoclaw alpha connect?");
   });
 
   it("list exits 0", () => {
@@ -2928,11 +2996,11 @@ describe("list shows live gateway inference", () => {
     expect(r.code).toBe(0);
     // Live gateway values render on the default sandbox's main row.
     expect(r.out).toContain(
-      "model: nvidia/nemotron-3-super-120b-a12b  provider: nvidia-prod  GPU  policies: pypi, npm",
+      "agent: openclaw  model: nvidia/nemotron-3-super-120b-a12b  provider: nvidia-prod  GPU  policies: pypi, npm",
     );
     // The stale (stored) row must not appear.
     expect(r.out).not.toContain(
-      "model: configured-model  provider: configured-provider  GPU  policies: pypi, npm",
+      "agent: openclaw  model: configured-model  provider: configured-provider  GPU  policies: pypi, npm",
     );
     // Onboarded values appear in the drift annotation.
     expect(r.out).toContain("(onboarded: model=configured-model, provider=configured-provider)");
