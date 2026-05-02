@@ -3450,6 +3450,62 @@ describe("CLI dispatch", () => {
     testTimeout(10_000),
   );
 
+  it(
+    "keeps status bounded when a live sandbox probe leaves child pipes open",
+    () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-status-timeout-"));
+      const localBin = path.join(home, "bin");
+      const registryDir = path.join(home, ".nemoclaw");
+      fs.mkdirSync(localBin, { recursive: true });
+      fs.mkdirSync(registryDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(registryDir, "sandboxes.json"),
+        JSON.stringify({
+          sandboxes: {
+            alpha: {
+              name: "alpha",
+              model: "test-model",
+              provider: "nvidia-prod",
+              gpuEnabled: false,
+              policies: [],
+            },
+          },
+          defaultSandbox: "alpha",
+        }),
+        { mode: 0o600 },
+      );
+      fs.writeFileSync(
+        path.join(localBin, "openshell"),
+        [
+          "#!/usr/bin/env bash",
+          'if [ "$1" = "sandbox" ] && [ "$2" = "get" ] && [ "$3" = "alpha" ]; then',
+          `  ${JSON.stringify(process.execPath)} -e "setInterval(() => {}, 1000)" &`,
+          "  wait",
+          "fi",
+          "exit 0",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+
+      const started = Date.now();
+      const r = runWithEnv(
+        "alpha status",
+        {
+          HOME: home,
+          PATH: `${localBin}:${process.env.PATH || ""}`,
+          NEMOCLAW_STATUS_PROBE_TIMEOUT_MS: "100",
+        },
+        10000,
+      );
+
+      expect(Date.now() - started).toBeLessThan(7000);
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("Model:    test-model");
+      expect(r.out).toContain("Live sandbox status probe timed out");
+    },
+    testTimeout(10_000),
+  );
+
   it("recovers status after gateway runtime is reattached", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-recover-status-"));
     const localBin = path.join(home, "bin");

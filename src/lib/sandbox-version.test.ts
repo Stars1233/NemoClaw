@@ -155,6 +155,20 @@ describe("checkAgentVersion", () => {
     expect(result.isStale).toBe(false);
   });
 
+  it("can skip live probing when no cached version is available", () => {
+    registry.registerSandbox({ name: "test-sb", agent: null });
+    vi.mocked(captureOpenshellCommand).mockClear();
+    vi.mocked(spawnSync).mockClear();
+
+    const result = checkAgentVersion("test-sb", { skipProbe: true });
+
+    expect(result.detectionMethod).toBe("unavailable");
+    expect(result.sandboxVersion).toBeNull();
+    expect(result.isStale).toBe(false);
+    expect(captureOpenshellCommand).not.toHaveBeenCalled();
+    expect(spawnSync).not.toHaveBeenCalled();
+  });
+
   it("force probe bypasses cached version", () => {
     registry.registerSandbox({
       name: "test-sb",

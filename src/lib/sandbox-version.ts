@@ -87,7 +87,7 @@ export function probeAgentVersion(sandboxName: string): string | null {
  */
 export function checkAgentVersion(
   sandboxName: string,
-  opts?: { forceProbe?: boolean },
+  opts?: { forceProbe?: boolean; skipProbe?: boolean },
 ): VersionCheckResult {
   const agent = resolveAgentForSandbox(sandboxName);
   const expectedVersion = agent.expectedVersion;
@@ -107,6 +107,10 @@ export function checkAgentVersion(
       isStale,
       detectionMethod: "registry",
     };
+  }
+
+  if (opts?.skipProbe && !opts.forceProbe) {
+    return { sandboxVersion: null, expectedVersion, isStale: false, detectionMethod: "unavailable" };
   }
 
   // Slow path: SSH exec into sandbox

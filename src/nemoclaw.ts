@@ -60,6 +60,7 @@ const { parseLiveSandboxNames } = require("./lib/runtime-recovery");
 const { NOTICE_ACCEPT_ENV, NOTICE_ACCEPT_FLAG } = require("./lib/usage-notice");
 const { runDeprecatedOnboardAliasCommand, runOnboardCommand } = require("./lib/onboard-command");
 const {
+  captureOpenshellCommandAsync,
   captureOpenshellCommand,
   getInstalledOpenshellVersion,
   runOpenshellCommand,
@@ -198,6 +199,26 @@ function captureOpenshell(args: CommandArgs, opts: RunnerOptions = {}) {
   });
 }
 
+function getStatusProbeTimeoutMs(): number {
+  const raw = process.env.NEMOCLAW_STATUS_PROBE_TIMEOUT_MS;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : OPENSHELL_PROBE_TIMEOUT_MS;
+}
+
+function captureOpenshellForStatus(args: CommandArgs, opts: RunnerOptions = {}) {
+  return captureOpenshellCommandAsync(getOpenshellBinary(), args, {
+    cwd: ROOT,
+    env: opts.env,
+    ignoreError: opts.ignoreError,
+    timeout: opts.timeout ?? getStatusProbeTimeoutMs(),
+    killGraceMs: 1000,
+  });
+}
+
+function isCommandTimeout(result: { error?: Error }) {
+  return (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+}
+
 function cleanupGatewayAfterLastSandbox() {
   runOpenshell(["forward", "stop", DASHBOARD_FORWARD_PORT], {
     ignoreError: true,
@@ -328,6 +349,28 @@ function executeSandboxExecCommand(
   }
 }
 
+async function executeSandboxExecCommandForStatus(
+  sandboxName: string,
+  command: string,
+): Promise<SandboxCommandResult | null> {
+  const markedCommand = `printf '%s\\n' '${SANDBOX_EXEC_STARTED_MARKER}'; ${command}`;
+  const result = await captureOpenshellForStatus(
+    ["sandbox", "exec", "--name", sandboxName, "--", "sh", "-c", markedCommand],
+    { ignoreError: true },
+  );
+  if (isCommandTimeout(result) || result.error) return null;
+  const stdout = (result.output || "").trim();
+  const stdoutLines = stdout.split(/\r?\n/);
+  const markerIndex = stdoutLines.indexOf(SANDBOX_EXEC_STARTED_MARKER);
+  if (markerIndex === -1) return null;
+  const commandStdoutLines = stdoutLines.slice(markerIndex + 1);
+  return {
+    status: result.status ?? 1,
+    stdout: commandStdoutLines.join("\n").trim(),
+    stderr: "",
+  };
+}
+
 function parseSandboxGatewayProbe(result: SandboxCommandResult | null): boolean | null {
   if (!result) return null;
   if (result.stdout === "RUNNING") return true;
@@ -348,6 +391,13 @@ function isSandboxGatewayRunning(sandboxName: string): boolean | null {
   const execProbe = parseSandboxGatewayProbe(executeSandboxExecCommand(sandboxName, command));
   if (execProbe !== null) return execProbe;
   return parseSandboxGatewayProbe(executeSandboxCommand(sandboxName, command));
+}
+
+async function isSandboxGatewayRunningForStatus(sandboxName: string): Promise<boolean | null> {
+  const agent = agentRuntime.getSessionAgent(sandboxName);
+  const probeUrl = agentRuntime.getHealthProbeUrl(agent);
+  const command = `curl -sf --max-time 3 ${shellQuote(probeUrl)} > /dev/null 2>&1 && echo RUNNING || echo STOPPED`;
+  return parseSandboxGatewayProbe(await executeSandboxExecCommandForStatus(sandboxName, command));
 }
 
 /**
@@ -786,6 +836,39 @@ async function recoverNamedGatewayRuntime() {
   return { recovered: false, before, after, attempted: true };
 }
 
+function mergeLivePolicyIntoSandboxOutput(output: string, livePolicyOutput: string): string {
+  const rawLines = String(output).split("\n");
+  const cleanLines = stripAnsi(String(output)).split("\n");
+  const policyLineIdx = cleanLines.findIndex((l: string) => l.trim() === "Policy:");
+  if (policyLineIdx === -1) return output;
+
+  // Keep everything before Policy (Sandbox info with colors),
+  // plus the original colored "Policy:" header line.
+  const before = rawLines.slice(0, policyLineIdx + 1).join("\n");
+  // Extract YAML content from policy get --full (skip metadata header before "---").
+  // Use a regex to handle varying line endings (\n, \r\n) and optional trailing whitespace.
+  const delimIdx = livePolicyOutput.search(/^---\s*$/m);
+  const yamlPart =
+    delimIdx !== -1
+      ? livePolicyOutput.slice(delimIdx).replace(/^---\s*[\r\n]+/, "")
+      : livePolicyOutput;
+  // Guard: only replace if the extracted content looks like policy YAML
+  // (starts with a YAML key like "version:" or "network_policies:").
+  // Avoids replacing with warnings or status text from unexpected output.
+  const trimmedYaml = yamlPart.trim();
+  const looksLikeError = /^(error|failed|invalid|warning|status)\b/i.test(trimmedYaml);
+  if (!trimmedYaml || looksLikeError || !/^[a-z_][a-z0-9_]*\s*:/m.test(trimmedYaml)) {
+    return output;
+  }
+
+  // Add 2-space indent to match the original sandbox get output format.
+  const indented = trimmedYaml
+    .split("\n")
+    .map((l: string) => (l ? "  " + l : l))
+    .join("\n");
+  return before + "\n\n" + indented + "\n";
+}
+
 /** Query sandbox presence and return its output with the live enforced policy. */
 function getSandboxGatewayState(sandboxName: string) {
   const result = captureOpenshell(["sandbox", "get", sandboxName], {
@@ -803,34 +886,7 @@ function getSandboxGatewayState(sandboxName: string) {
       timeout: OPENSHELL_PROBE_TIMEOUT_MS,
     });
     if (livePolicy.status === 0 && livePolicy.output.trim()) {
-      const rawLines = String(output).split("\n");
-      const cleanLines = stripAnsi(String(output)).split("\n");
-      const policyLineIdx = cleanLines.findIndex((l: string) => l.trim() === "Policy:");
-      if (policyLineIdx !== -1) {
-        // Keep everything before Policy (Sandbox info with colors),
-        // plus the original colored "Policy:" header line.
-        const before = rawLines.slice(0, policyLineIdx + 1).join("\n");
-        // Extract YAML content from policy get --full (skip metadata header before "---").
-        // Use a regex to handle varying line endings (\n, \r\n) and optional trailing whitespace.
-        const delimIdx = livePolicy.output.search(/^---\s*$/m);
-        const yamlPart =
-          delimIdx !== -1
-            ? livePolicy.output.slice(delimIdx).replace(/^---\s*[\r\n]+/, "")
-            : livePolicy.output;
-        // Guard: only replace if the extracted content looks like policy YAML
-        // (starts with a YAML key like "version:" or "network_policies:").
-        // Avoids replacing with warnings or status text from unexpected output.
-        const trimmedYaml = yamlPart.trim();
-        const looksLikeError = /^(error|failed|invalid|warning|status)\b/i.test(trimmedYaml);
-        if (trimmedYaml && !looksLikeError && /^[a-z_][a-z0-9_]*\s*:/m.test(trimmedYaml)) {
-          // Add 2-space indent to match the original sandbox get output format.
-          const indented = trimmedYaml
-            .split("\n")
-            .map((l: string) => (l ? "  " + l : l))
-            .join("\n");
-          output = before + "\n\n" + indented + "\n";
-        }
-      }
+      output = mergeLivePolicyIntoSandboxOutput(output, livePolicy.output);
     }
     return { state: "present", output };
   }
@@ -846,6 +902,47 @@ function getSandboxGatewayState(sandboxName: string) {
   }
   return { state: "unknown_error", output };
 }
+
+async function getSandboxGatewayStateForStatus(sandboxName: string) {
+  const timeoutMs = getStatusProbeTimeoutMs();
+  const result = await captureOpenshellForStatus(["sandbox", "get", sandboxName], {
+    timeout: timeoutMs,
+  });
+  let output = result.output;
+  if (isCommandTimeout(result)) {
+    return {
+      state: "status_probe_timeout",
+      output: `  Live sandbox status probe timed out after ${Math.ceil(timeoutMs / 1000)}s. Local registry data is shown above.`,
+    };
+  }
+  if (result.status === 0) {
+    const livePolicy = await captureOpenshellForStatus(["policy", "get", "--full", sandboxName], {
+      ignoreError: true,
+      timeout: timeoutMs,
+    });
+    if (!isCommandTimeout(livePolicy) && livePolicy.status === 0 && livePolicy.output.trim()) {
+      output = mergeLivePolicyIntoSandboxOutput(output, livePolicy.output);
+    }
+    return { state: "present", output };
+  }
+  if (/\bNotFound\b|\bNot Found\b|sandbox not found/i.test(output)) {
+    return { state: "missing", output };
+  }
+  if (
+    /transport error|Connection refused|handshake verification failed|Missing gateway auth token|device identity required/i.test(
+      output,
+    )
+  ) {
+    return { state: "gateway_error", output };
+  }
+  return { state: "unknown_error", output };
+}
+
+type SandboxGatewayStateLookup = (
+  sandboxName: string,
+) =>
+  | ReturnType<typeof getSandboxGatewayState>
+  | ReturnType<typeof getSandboxGatewayStateForStatus>;
 
 /**
  * Reconcile a NotFound sandbox lookup against the named NemoClaw gateway state.
@@ -963,8 +1060,12 @@ function printGatewayLifecycleHint(output = "", sandboxName = "", writer = conso
   }
 }
 
-async function getReconciledSandboxGatewayState(sandboxName: string) {
-  let lookup = getSandboxGatewayState(sandboxName);
+async function getReconciledSandboxGatewayState(
+  sandboxName: string,
+  opts: { getState?: SandboxGatewayStateLookup } = {},
+) {
+  const getState = opts.getState ?? getSandboxGatewayState;
+  let lookup = await getState(sandboxName);
   if (lookup.state === "present") {
     return lookup;
   }
@@ -975,7 +1076,7 @@ async function getReconciledSandboxGatewayState(sandboxName: string) {
   if (lookup.state === "gateway_error") {
     const recovery = await recoverNamedGatewayRuntime();
     if (recovery.recovered) {
-      const retried = getSandboxGatewayState(sandboxName);
+      const retried = await getState(sandboxName);
       if (retried.state === "present" || retried.state === "missing") {
         return { ...retried, recoveredGateway: true, recoveryVia: recovery.via || null };
       }
@@ -2103,11 +2204,11 @@ async function sandboxDoctor(sandboxName: string, args: string[] = []): Promise<
 // eslint-disable-next-line complexity
 async function sandboxStatus(sandboxName: string) {
   const sb = registry.getSandbox(sandboxName);
+  const liveResult = await captureOpenshellForStatus(["inference", "get"], {
+    ignoreError: true,
+  });
   const live = parseGatewayInference(
-    captureOpenshell(["inference", "get"], {
-      ignoreError: true,
-      timeout: OPENSHELL_PROBE_TIMEOUT_MS,
-    }).output,
+    isCommandTimeout(liveResult) ? "" : liveResult.output,
   );
   const currentModel = (live && live.model) || (sb && sb.model) || "unknown";
   const currentProvider = (live && live.provider) || (sb && sb.provider) || "unknown";
@@ -2156,7 +2257,7 @@ async function sandboxStatus(sandboxName: string) {
 
     // Agent version check
     try {
-      const versionCheck = sandboxVersion.checkAgentVersion(sandboxName);
+      const versionCheck = sandboxVersion.checkAgentVersion(sandboxName, { skipProbe: true });
       const agent = agentRuntime.getSessionAgent(sandboxName);
       const agentName = agentRuntime.getAgentDisplayName(agent);
       if (versionCheck.sandboxVersion) {
@@ -2171,7 +2272,9 @@ async function sandboxStatus(sandboxName: string) {
     }
   }
 
-  const lookup = await getReconciledSandboxGatewayState(sandboxName);
+  const lookup = await getReconciledSandboxGatewayState(sandboxName, {
+    getState: getSandboxGatewayStateForStatus,
+  });
   if (lookup.state === "present") {
     console.log("");
     if ("recoveredGateway" in lookup && lookup.recoveredGateway) {
@@ -2278,14 +2381,12 @@ async function sandboxStatus(sandboxName: string) {
 
   // OpenClaw process health inside the sandbox
   if (lookup.state === "present") {
-    const processCheck = checkAndRecoverSandboxProcesses(sandboxName, { quiet: true });
-    if (processCheck.checked) {
+    const running = await isSandboxGatewayRunningForStatus(sandboxName);
+    if (running !== null) {
       const _sa = agentRuntime.getSessionAgent(sandboxName);
       const _saName = agentRuntime.getAgentDisplayName(_sa);
-      if (processCheck.wasRunning) {
+      if (running) {
         console.log(`    ${_saName}: ${G}running${R}`);
-      } else if (processCheck.recovered) {
-        console.log(`    ${_saName}: ${G}recovered${R} (gateway restarted after sandbox restart)`);
       } else {
         console.log(`    ${_saName}: ${_RD}not running${R}`);
         console.log("");
