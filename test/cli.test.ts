@@ -577,8 +577,117 @@ describe("CLI dispatch", () => {
   it("status --help exits 0 and shows status usage", () => {
     const r = run("status --help");
     expect(r.code).toBe(0);
-    expect(r.out).toContain("status");
+    expect(r.out).toContain("status [--json]");
     expect(r.out).toContain("Show sandbox list and service status");
+  });
+
+  it("status --json emits parseable structured status without credentials", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-status-json-"));
+    const localBin = path.join(home, "bin");
+    const registryDir = path.join(home, ".nemoclaw");
+    const sandboxName = `alpha-${process.pid}-${Date.now()}`;
+    const serviceDir = path.join("/tmp", `nemoclaw-services-${sandboxName}`);
+    fs.rmSync(serviceDir, { recursive: true, force: true });
+    fs.mkdirSync(localBin, { recursive: true });
+    fs.mkdirSync(registryDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(registryDir, "sandboxes.json"),
+      JSON.stringify({
+        sandboxes: {
+          [sandboxName]: {
+            name: sandboxName,
+            model: "configured-model",
+            provider: "configured-provider",
+            gpuEnabled: true,
+            policies: ["npm"],
+            agent: "openclaw",
+            dashboardPort: 18789,
+            providerCredentialHashes: {
+              OPENAI_API_KEY: "sk-should-not-render-000000000000",
+            },
+            messagingChannels: ["slack"],
+            dashboardUrl: "http://127.0.0.1:18789/?token=dashboard-secret",
+            logs: "Bearer should-not-render xoxb-should-not-render-000000",
+          },
+        },
+        defaultSandbox: sandboxName,
+      }),
+      { mode: 0o600 },
+    );
+    fs.writeFileSync(
+      path.join(localBin, "openshell"),
+      [
+        "#!/usr/bin/env bash",
+        'if [ "$1" = "inference" ] && [ "$2" = "get" ]; then',
+        "  echo 'Gateway inference:'",
+        "  echo",
+        "  echo '  Provider: nvidia-prod'",
+        "  echo '  Model: nvidia/nemotron'",
+        "  exit 0",
+        "fi",
+        "exit 0",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    try {
+      const r = runWithEnv("status --json", {
+        HOME: home,
+        PATH: `${localBin}:${process.env.PATH || ""}`,
+      });
+
+      expect(r.code).toBe(0);
+      expect(r.out.trim().startsWith("{")).toBe(true);
+      expect(r.out.trim().endsWith("}")).toBe(true);
+      expect(r.out).not.toContain("Sandboxes:");
+      expect(r.out).not.toContain("(stopped)");
+
+      const parsed = JSON.parse(r.out);
+      expect(parsed).toMatchObject({
+        schemaVersion: 1,
+        defaultSandbox: sandboxName,
+        liveInference: {
+          provider: "nvidia-prod",
+          model: "nvidia/nemotron",
+        },
+        sandboxes: [
+          {
+            name: sandboxName,
+            model: "nvidia/nemotron",
+            provider: "nvidia-prod",
+            gpuEnabled: true,
+            policies: ["npm"],
+            agent: "openclaw",
+            dashboardPort: 18789,
+            isDefault: true,
+          },
+        ],
+        services: [
+          {
+            name: "cloudflared",
+            running: false,
+            pid: null,
+          },
+        ],
+      });
+      expect(r.out).not.toMatch(
+        /Bearer|nvapi-|sk-|xoxb-|xapp-|password|api[-_]?key|providerCredentialHashes|dashboard-secret|should-not-render/i,
+      );
+    } finally {
+      fs.rmSync(serviceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("status rejects unknown flags through current dispatch path", () => {
+    const r = run("status --bogus");
+    expect(r.code).toBe(2);
+    expect(r.out).toContain("Nonexistent flag: --bogus");
+  });
+
+  it("status rejects unexpected positional arguments through current dispatch path", () => {
+    const r = run("status bogus");
+    expect(r.code).toBe(2);
+    expect(r.out).toContain("Unexpected argument: bogus");
   });
 
   it("tunnel start --help exits 0 and shows tunnel usage", () => {
