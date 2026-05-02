@@ -57,8 +57,6 @@ const { help, version } = require("./lib/root-help-action");
 const onboardSession = require("./lib/onboard-session");
 import type { Session } from "./lib/onboard-session";
 const { parseLiveSandboxNames } = require("./lib/runtime-recovery");
-const { NOTICE_ACCEPT_ENV, NOTICE_ACCEPT_FLAG } = require("./lib/usage-notice");
-const { runDeprecatedOnboardAliasCommand, runOnboardCommand } = require("./lib/onboard-command");
 const {
   captureOpenshellCommandAsync,
   captureOpenshellCommand,
@@ -701,7 +699,6 @@ exports.runtimeBridge = {
   captureOpenshell,
   backupAll,
   garbageCollectImages,
-  onboard,
   recoverNamedGatewayRuntime,
   recoverRegistryEntries,
   runOpenshell,
@@ -720,8 +717,6 @@ exports.runtimeBridge = {
   sandboxSkillInstall,
   sandboxSnapshot,
   sandboxStatus,
-  setup,
-  setupSpark,
   upgradeSandboxes,
 };
 exports.ensureLiveSandboxOrExit = ensureLiveSandboxOrExit;
@@ -1271,40 +1266,6 @@ function exitWithSpawnResult(result: SpawnLikeResult & { signal?: NodeJS.Signals
 }
 
 // ── Commands ─────────────────────────────────────────────────────
-
-function buildOnboardCommandDeps(args: string[]) {
-  const { onboard: runOnboard } = require("./lib/onboard");
-  const { listAgents } = require("./lib/agent-defs");
-  return {
-    args,
-    noticeAcceptFlag: NOTICE_ACCEPT_FLAG,
-    noticeAcceptEnv: NOTICE_ACCEPT_ENV,
-    env: process.env,
-    runOnboard,
-    listAgents,
-    log: console.log,
-    error: console.error,
-    exit: (code: number) => process.exit(code),
-  };
-}
-
-async function onboard(args: string[]): Promise<void> {
-  await runOnboardCommand(buildOnboardCommandDeps(args));
-}
-
-async function setup(args: string[] = []): Promise<void> {
-  await runDeprecatedOnboardAliasCommand({
-    ...buildOnboardCommandDeps(args),
-    kind: "setup",
-  });
-}
-
-async function setupSpark(args: string[] = []): Promise<void> {
-  await runDeprecatedOnboardAliasCommand({
-    ...buildOnboardCommandDeps(args),
-    kind: "setup-spark",
-  });
-}
 
 async function runOclif(commandId: string, args: string[] = []): Promise<void> {
   await runRegisteredOclifCommand(commandId, args, {
