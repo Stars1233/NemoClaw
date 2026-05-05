@@ -1,28 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("./runner", () => ({ ROOT: process.cwd() }));
-vi.mock("./openshell-runtime", () => ({
-  getOpenshellBinary: () => "openshell",
-  runOpenshell: () => ({ status: 0 }),
-}));
+import { describe, expect, it } from "vitest";
 
 import {
   buildEnableSandboxAuditLogsArgs,
   buildSandboxLogsArgs,
   buildSandboxOpenclawGatewayLogsArgs,
   describeLogProbeResult,
+  exitCodeFromSignal,
   getLogsProbeTimeoutMs,
   normalizeSandboxLogsOptions,
-} from "./sandbox-logs-action";
+} from "./sandbox-logs-helpers";
 
-describe("sandbox logs action helpers", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
+describe("sandbox logs helpers", () => {
   it("normalizes boolean and partial logs options", () => {
     expect(normalizeSandboxLogsOptions(true)).toEqual({ follow: true, lines: "200", since: null });
     expect(normalizeSandboxLogsOptions({ follow: false, lines: "", since: "" })).toEqual({
@@ -68,11 +59,14 @@ describe("sandbox logs action helpers", () => {
     expect(describeLogProbeResult({ status: null, signal: "SIGTERM" })).toBe("signal SIGTERM");
     expect(describeLogProbeResult({ status: 7 })).toBe("exit 7");
 
-    vi.stubEnv("NEMOCLAW_LOGS_PROBE_TIMEOUT_MS", "1234");
-    expect(getLogsProbeTimeoutMs()).toBe(1234);
-    vi.stubEnv("NEMOCLAW_LOGS_PROBE_TIMEOUT_MS", "0");
-    expect(getLogsProbeTimeoutMs()).toBe(5000);
-    vi.stubEnv("NEMOCLAW_LOGS_PROBE_TIMEOUT_MS", "not-a-number");
-    expect(getLogsProbeTimeoutMs()).toBe(5000);
+    expect(getLogsProbeTimeoutMs({ NEMOCLAW_LOGS_PROBE_TIMEOUT_MS: "1234" })).toBe(1234);
+    expect(getLogsProbeTimeoutMs({ NEMOCLAW_LOGS_PROBE_TIMEOUT_MS: "0" })).toBe(5000);
+    expect(getLogsProbeTimeoutMs({ NEMOCLAW_LOGS_PROBE_TIMEOUT_MS: "not-a-number" })).toBe(5000);
+    expect(getLogsProbeTimeoutMs({})).toBe(5000);
+  });
+
+  it("maps signals to conventional process exit codes", () => {
+    expect(exitCodeFromSignal(null)).toBe(1);
+    expect(exitCodeFromSignal("SIGINT")).toBe(130);
   });
 });
