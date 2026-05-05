@@ -1157,6 +1157,12 @@ describe("CLI dispatch", () => {
     expect(r.out).toContain("Nonexistent flag: --quik");
   });
 
+  it("debug --output without a path is rejected by oclif", () => {
+    const r = run("debug --output");
+    expect(r.code).not.toBe(0);
+    expect(r.out).toContain("Flag --output expects a value");
+  });
+
   it("help mentions debug command", () => {
     const r = run("help");
     expect(r.code).toBe(0);
