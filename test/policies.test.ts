@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import type { Interface as ReadlineInterface } from "node:readline";
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import policies from "../dist/lib/policies";
 import { execTimeout } from "./helpers/timeouts";
@@ -1278,8 +1278,17 @@ Promise.resolve(require(${CLI_PATH}).mainPromise).finally(() => {
   });
 
   describe("loadPresetFromFile", () => {
+    const tmpDirs: string[] = [];
+    afterEach(() => {
+      while (tmpDirs.length > 0) {
+        const dir = tmpDirs.pop();
+        if (dir) fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     function writeTmp(body: string, ext = "yaml") {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-custom-preset-"));
+      tmpDirs.push(dir);
       const file = path.join(dir, `custom.${ext}`);
       fs.writeFileSync(file, body);
       return { dir, file };
@@ -1395,6 +1404,39 @@ Promise.resolve(require(${CLI_PATH}).mainPromise).finally(() => {
         expect(
           msgs.some((m) => typeof m === "string" && m.includes("collides with a built-in")),
         ).toBe(true);
+      } finally {
+        errSpy.mockRestore();
+      }
+    });
+
+    it("rejects files exceeding the size limit before reading", () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-custom-preset-"));
+      tmpDirs.push(dir);
+      const file = path.join(dir, "huge.yaml");
+      const padding = "# ".repeat(5_500_000);
+      fs.writeFileSync(file, `preset:\n  name: huge\nnetwork_policies:\n  r:\n    name: r\n${padding}`);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(policies.loadPresetFromFile(file)).toBe(null);
+        const msgs = errSpy.mock.calls.map((c) => c[0]);
+        expect(msgs.some((m) => typeof m === "string" && m.includes("too large"))).toBe(true);
+      } finally {
+        errSpy.mockRestore();
+      }
+    });
+
+    it("rejects symbolic links to a preset file", () => {
+      const body = "preset:\n  name: link-target\nnetwork_policies:\n  r:\n    name: r\n";
+      const { dir, file } = writeTmp(body);
+      const linkPath = path.join(dir, "link.yaml");
+      fs.symlinkSync(file, linkPath);
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(policies.loadPresetFromFile(linkPath)).toBe(null);
+        const msgs = errSpy.mock.calls.map((c) => c[0]);
+        expect(msgs.some((m) => typeof m === "string" && m.includes("must not be a symbolic link"))).toBe(
+          true,
+        );
       } finally {
         errSpy.mockRestore();
       }
