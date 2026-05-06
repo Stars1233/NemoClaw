@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/* v8 ignore start -- covered by source-level unit tests; CLI coverage tracks dist integration. */
 export const DEV_SHIM_MARKER = "# NemoClaw dev-shim - managed by scripts/npm-link-or-shim.sh";
 
 export type ShimKind =
@@ -86,3 +87,4 @@ export function classifyNemoclawShim(input: ShimInput): ShimClassification {
     reason: "regular file is not an installer-managed shim",
   };
 }
+/* v8 ignore stop */

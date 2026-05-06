@@ -27,4 +27,16 @@ describe("internal oclif namespace", () => {
     expect(result.stdout).toContain("Internal: configure sandbox DNS proxy");
     expect(result.stdout).toContain("nemoclaw internal dns setup-proxy <gateway-name> <sandbox-name>");
   });
+
+  it("exposes uninstall plan commands through oclif routing", () => {
+    const result = spawnSync(process.execPath, [CLI, "internal", "uninstall", "run-plan", "--help"], {
+      encoding: "utf-8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("NemoClaw Uninstaller");
+    expect(result.stdout).toContain("--delete-models");
+    expect(result.stdout).toContain("--keep-openshell");
+    expect(result.stdout).toContain("--yes");
+  });
 });

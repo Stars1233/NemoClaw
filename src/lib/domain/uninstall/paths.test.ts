@@ -26,6 +26,12 @@ describe("uninstall paths", () => {
     ]);
   });
 
+  it("defaults repoRoot outside src/dist module directories", () => {
+    const paths = defaultUninstallPaths({ home: "/home/test" });
+    expect(paths.repoRoot.endsWith(`${path.sep}src`)).toBe(false);
+    expect(paths.repoRoot.endsWith(`${path.sep}dist`)).toBe(false);
+  });
+
   it("returns state removal paths in shell cleanup order", () => {
     const paths = defaultUninstallPaths({ home: "/home/test" });
     expect(uninstallStatePaths(paths)).toEqual([

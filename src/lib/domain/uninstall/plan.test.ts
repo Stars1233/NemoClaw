@@ -28,8 +28,11 @@ describe("uninstall plan", () => {
         { kind: "delete-openshell-provider", name: "nvidia-nim" },
         { kind: "destroy-openshell-gateway", name: "nemoclaw" },
         { kind: "delete-shim", reason: "installer-managed wrapper contents" },
+        { kind: "delete-related-docker-containers" },
+        { kind: "delete-related-docker-images" },
         { kind: "delete-docker-volume", name: "openshell-cluster-nemoclaw" },
         { kind: "preserve-ollama-models", names: ["nemotron-3-super:120b", "nemotron-3-nano:30b"] },
+        { kind: "delete-managed-swap" },
         { kind: "delete-openshell-binary", path: "/usr/local/bin/openshell" },
       ]),
     );
