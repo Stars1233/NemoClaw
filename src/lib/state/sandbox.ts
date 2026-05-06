@@ -26,12 +26,12 @@ import os from "node:os";
 import path from "node:path";
 
 import * as registry from "./registry.js";
-import { loadAgent } from "./agent-defs.js";
-import type { AgentStateFile } from "./agent-defs.js";
-import { resolveOpenshell } from "./adapters/openshell/resolve.js";
-import { captureOpenshellCommand } from "./adapters/openshell/client.js";
-import { sanitizeConfigFile, isSensitiveFile } from "./credential-filter.js";
-import { shellQuote } from "./runner.js";
+import { loadAgent } from "../agent-defs.js";
+import type { AgentStateFile } from "../agent-defs.js";
+import { resolveOpenshell } from "../adapters/openshell/resolve.js";
+import { captureOpenshellCommand } from "../adapters/openshell/client.js";
+import { sanitizeConfigFile, isSensitiveFile } from "../credential-filter.js";
+import { shellQuote } from "../runner.js";
 
 const HOME_DIR = path.resolve(process.env.HOME || os.homedir());
 const REBUILD_BACKUPS_DIR = path.join(HOME_DIR, ".nemoclaw", "rebuild-backups");

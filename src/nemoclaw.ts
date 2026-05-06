@@ -36,8 +36,8 @@ const {
 } = require("./lib/docker");
 const { resolveOpenshell } = require("./lib/adapters/openshell/resolve");
 const { hydrateCredentialEnv, isNonInteractive } = require("./lib/onboard");
-const registry = require("./lib/registry");
-import type { SandboxEntry } from "./lib/registry";
+const registry = require("./lib/state/registry");
+import type { SandboxEntry } from "./lib/state/registry";
 const nim = require("./lib/nim");
 const shields = require("./lib/shields");
 const { parseGatewayInference } = require("./lib/inference-config");
@@ -70,13 +70,13 @@ const {
 const { runRegisteredOclifCommand } = require("./lib/cli/oclif-runner");
 const { isErrnoException }: typeof import("./lib/errno") = require("./lib/errno");
 const agentRuntime = require("../bin/lib/agent-runtime");
-const sandboxState = require("./lib/sandbox-state");
+const sandboxState = require("./lib/state/sandbox");
 const { parseRestoreArgs } = sandboxState;
 const {
   getActiveSandboxSessions,
   createSystemDeps: createSessionDeps,
   parseForwardList,
-} = require("./lib/sandbox-session-state");
+} = require("./lib/state/sandbox-session");
 
 const {
   canonicalUsageList,

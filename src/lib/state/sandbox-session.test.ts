@@ -12,7 +12,7 @@ import {
   type ForwardEntry,
   type SessionClassification,
   type SessionDetectionDeps,
-} from "./sandbox-session-state";
+} from "./sandbox-session";
 
 describe("parseForwardList", () => {
   it("returns empty array for empty/null input", () => {

@@ -15,13 +15,13 @@ import * as onboardSession from "../../onboard-session";
 import type { Session } from "../../onboard-session";
 import { OPENSHELL_PROBE_TIMEOUT_MS } from "../../adapters/openshell/timeouts";
 import { DASHBOARD_PORT } from "../../ports";
-import * as registry from "../../registry";
+import * as registry from "../../state/registry";
 import { resolveOpenshell } from "../../adapters/openshell/resolve";
 import { parseLiveSandboxNames } from "../../runtime-recovery";
 import {
   createSystemDeps as createSessionDeps,
   getActiveSandboxSessions,
-} from "../../sandbox-session-state";
+} from "../../state/sandbox-session";
 import {
   getSandboxDeleteOutcome,
   shouldCleanupGatewayAfterDestroy,

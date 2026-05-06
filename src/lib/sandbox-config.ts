@@ -94,7 +94,7 @@ const DEFAULT_AGENT_CONFIG: AgentConfigTarget = {
 
 function resolveAgentConfig(sandboxName: string): AgentConfigTarget {
   try {
-    const registry = require("./registry");
+    const registry = require("./state/registry");
     const entry = registry.getSandbox(sandboxName);
     if (!entry || !entry.agent) return DEFAULT_AGENT_CONFIG;
 

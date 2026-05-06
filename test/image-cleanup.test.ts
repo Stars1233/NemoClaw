@@ -98,7 +98,7 @@ describe("image cleanup: onboard records imageTag in registry (#2086)", () => {
 });
 
 describe("image cleanup: registry stores imageTag (#2086)", () => {
-  const registrySrc = fs.readFileSync(path.join(ROOT, "src/lib/registry.ts"), "utf-8");
+  const registrySrc = fs.readFileSync(path.join(ROOT, "src/lib/state/registry.ts"), "utf-8");
 
   it("SandboxEntry interface includes imageTag field", () => {
     expect(registrySrc).toMatch(/imageTag\?:\s*string\s*\|\s*null/);
@@ -109,7 +109,7 @@ describe("image cleanup: registry stores imageTag (#2086)", () => {
     const registerMatch = registrySrc.match(/function registerSandbox[\s\S]*?^}/m);
     expect(registerMatch).toBeTruthy();
     if (!registerMatch) {
-      throw new Error("Expected registerSandbox() in src/lib/registry.ts");
+      throw new Error("Expected registerSandbox() in src/lib/state/registry.ts");
     }
     expect(registerMatch[0]).toContain("imageTag");
   });

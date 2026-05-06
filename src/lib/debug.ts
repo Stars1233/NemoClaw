@@ -8,7 +8,7 @@ import { platform, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 import { DASHBOARD_PORT } from "./ports";
-import { listSandboxes } from "./registry";
+import { listSandboxes } from "./state/registry";
 
 // ---------------------------------------------------------------------------
 // Types

@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ensureConfigDir, readConfigFile, writeConfigFile } from "./config-io";
-import { isErrnoException } from "./errno";
+import { isErrnoException } from "../errno";
 
 export interface CustomPolicyEntry {
   name: string;
