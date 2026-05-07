@@ -38,6 +38,25 @@ describe("runFixCoreDns", () => {
     expect(log).toHaveBeenCalledWith("Skipping CoreDNS patch: no supported Colima or Podman Docker socket found.");
   });
 
+  it("does not treat the Docker Desktop socket as Podman on macOS", () => {
+    const log = vi.fn();
+    const runDocker = vi.fn();
+    const result = runFixCoreDns(
+      {},
+      {
+        env: { HOME: "/Users/test" },
+        existsSocket: (socketPath) => socketPath === "/var/run/docker.sock",
+        log,
+        platform: "darwin",
+        runDocker,
+      },
+    );
+
+    expect(result).toEqual({ exitCode: 0, runtime: "unknown", skipped: true });
+    expect(runDocker).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("Skipping CoreDNS patch: no supported Colima or Podman Docker socket found.");
+  });
+
   it("patches CoreDNS through docker with JSON-escaped Corefile payload", () => {
     const calls: Array<[string, string[]]> = [];
     const log = vi.fn();

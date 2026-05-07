@@ -117,7 +117,7 @@ function detectDockerHost(env: NodeJS.ProcessEnv, deps: FixCoreDnsDeps): { docke
 
   const podmanCandidates =
     (deps.platform ?? process.platform) === "darwin"
-      ? [path.join(home, ".local/share/containers/podman/machine/podman.sock"), "/var/run/docker.sock"]
+      ? [path.join(home, ".local/share/containers/podman/machine/podman.sock")]
       : [
           path.join(env.XDG_RUNTIME_DIR || `/run/user/${deps.uid?.() ?? "1000"}`, "podman/podman.sock"),
           `/run/user/${deps.uid?.() ?? "1000"}/podman/podman.sock`,

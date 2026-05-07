@@ -80,6 +80,13 @@ function collectImportRefs(absPath: string): ImportRef[] {
     ) {
       add(node.moduleSpecifier.text, node.moduleSpecifier);
     } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      node.moduleReference.expression &&
+      ts.isStringLiteralLike(node.moduleReference.expression)
+    ) {
+      add(node.moduleReference.expression.text, node.moduleReference.expression);
+    } else if (
       ts.isCallExpression(node) &&
       ((ts.isIdentifier(node.expression) && node.expression.text === "require") ||
         node.expression.kind === ts.SyntaxKind.ImportKeyword) &&
@@ -256,7 +263,10 @@ function checkCommandFile(absPath: string, repoPath: string, violations: Violati
   function visit(node: ts.Node): void {
     if (
       ts.isClassDeclaration(node) &&
-      node.heritageClauses?.some((clause) => clause.types.some(isCommandBase))
+      node.heritageClauses?.some(
+        (clause) =>
+          clause.token === ts.SyntaxKind.ExtendsKeyword && clause.types.some(isCommandBase),
+      )
     ) {
       commandClassCount += 1;
     }
