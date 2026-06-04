@@ -844,11 +844,24 @@ PYOVERRIDE
 
 # ── Agent identity reconciliation with provider routing ───────────
 # After the host-side `openshell inference set` swaps the gateway's
-# inference provider entry, agents.defaults.model.primary in
-# openclaw.json can drift from models.providers.<key>.models[0].name.
-# When that happens the gateway routes requests to the new model but
-# the agent self-reports the old one. Realign the two on every
-# sandbox start so the next session boots with a consistent identity.
+# inference provider entry, agents.defaults.model.primary AND the
+# in-sandbox models.providers.inference.models[0] entry can both go
+# stale: openshell only updates the gateway, not /sandbox/.openclaw/
+# openclaw.json. The gateway routes requests to the new model but
+# the agent self-reports the old one, and on the next gateway
+# reconciliation the file's stale entry can be pushed back, reverting
+# the route.
+#
+# Probe the live gateway via `openshell inference get --json` and
+# treat it as the source of truth: when the gateway model differs
+# from the file, align both primary and the inference provider's
+# first model entry so the agent identity and the gateway route stay
+# consistent across the next reconcile cycle.
+#
+# When the gateway probe is unavailable (no openshell binary, gateway
+# unreachable, malformed output), fall back to the legacy in-file
+# reconcile so the function still closes primary↔models[0] drift.
+#
 # Runs after apply_model_override so explicit NEMOCLAW_MODEL_OVERRIDE
 # values still win. No-op when already in sync.
 # Ref: https://github.com/NVIDIA/NemoClaw/issues/3175
@@ -867,32 +880,85 @@ reconcile_agent_model_with_provider() {
     return 0
   fi
 
+  local gateway_model=""
+  if command -v openshell >/dev/null 2>&1; then
+    gateway_model="$(
+      python3 - <<'PYPROBE'
+import json, subprocess
+try:
+    result = subprocess.run(
+        ["openshell", "inference", "get", "--json"],
+        capture_output=True,
+        timeout=3,
+        check=False,
+    )
+except Exception:
+    raise SystemExit(0)
+if result.returncode != 0:
+    raise SystemExit(0)
+try:
+    data = json.loads(result.stdout)
+except Exception:
+    raise SystemExit(0)
+model = data.get("model") if isinstance(data, dict) else None
+if isinstance(model, str) and model:
+    print(model)
+PYPROBE
+    )"
+  fi
+
   local provider_model_ref
   provider_model_ref="$(
-    python3 - "$config_file" <<'PYRECONCILE_READ'
-import json, sys
+    GATEWAY_MODEL="${gateway_model:-}" python3 - "$config_file" <<'PYRECONCILE_READ'
+import json, os, sys
+
 try:
     with open(sys.argv[1]) as f:
         cfg = json.load(f)
 except Exception:
     sys.exit(0)
+
 primary = cfg.get("agents", {}).get("defaults", {}).get("model", {}).get("primary")
 provider = cfg.get("models", {}).get("providers", {}).get("inference", {})
 models = provider.get("models") if isinstance(provider, dict) else None
-if not isinstance(models, list) or not models:
-    sys.exit(0)
-first = models[0]
-if not isinstance(first, dict):
-    sys.exit(0)
-provider_ref = first.get("name")
-if not isinstance(provider_ref, str) or not provider_ref:
-    provider_id = first.get("id")
-    if not isinstance(provider_id, str) or not provider_id:
+first = (
+    models[0]
+    if isinstance(models, list) and models and isinstance(models[0], dict)
+    else None
+)
+
+
+def qualify(model_id):
+    if not isinstance(model_id, str) or not model_id:
+        return None
+    return model_id if model_id.startswith("inference/") else f"inference/{model_id}"
+
+
+gateway_target = qualify(os.environ.get("GATEWAY_MODEL", ""))
+if gateway_target is not None:
+    bare = gateway_target[len("inference/"):]
+    first_name = first.get("name") if first is not None else None
+    first_id = first.get("id") if first is not None else None
+    primary_ok = isinstance(primary, str) and primary == gateway_target
+    first_name_ok = isinstance(first_name, str) and first_name == gateway_target
+    first_id_ok = isinstance(first_id, str) and (first_id == bare or first_id == gateway_target)
+    if primary_ok and first_name_ok and first_id_ok:
         sys.exit(0)
-    provider_ref = provider_id if provider_id.startswith("inference/") else f"inference/{provider_id}"
-if not isinstance(primary, str) or primary == provider_ref:
+    print(f"gateway\t{gateway_target}")
     sys.exit(0)
-print(provider_ref)
+
+# Legacy fallback: gateway probe is unavailable. Align primary with
+# the in-file provider entry only (models[0] is treated as the
+# source). Preserves pre-gateway-probe behavior for environments
+# without openshell.
+if first is None:
+    sys.exit(0)
+legacy_target = qualify(first.get("name") or first.get("id"))
+if legacy_target is None:
+    sys.exit(0)
+if isinstance(primary, str) and primary == legacy_target:
+    sys.exit(0)
+print(f"legacy\t{legacy_target}")
 PYRECONCILE_READ
   )"
 
@@ -900,17 +966,40 @@ PYRECONCILE_READ
     return 0
   fi
 
-  printf '[config] Reconciling agent identity with provider model: %s (#3175)\n' "$provider_model_ref" >&2
+  local source_mode="${provider_model_ref%%$'\t'*}"
+  provider_model_ref="${provider_model_ref#*$'\t'}"
+
+  printf '[config] Reconciling agent identity with provider model: %s (source=%s, #3175)\n' \
+    "$provider_model_ref" "$source_mode" >&2
 
   prepare_openclaw_config_for_write "$config_file" "$hash_file"
   local _write_rc=0
 
-  python3 - "$config_file" "$provider_model_ref" <<'PYRECONCILE_WRITE' || _write_rc=$?
-import json, sys
+  RECONCILE_SOURCE="$source_mode" python3 - "$config_file" "$provider_model_ref" <<'PYRECONCILE_WRITE' || _write_rc=$?
+import json, os, sys
 config_file, provider_model = sys.argv[1], sys.argv[2]
 with open(config_file) as f:
     cfg = json.load(f)
 cfg.setdefault("agents", {}).setdefault("defaults", {}).setdefault("model", {})["primary"] = provider_model
+if os.environ.get("RECONCILE_SOURCE") == "gateway":
+    bare = (
+        provider_model[len("inference/"):]
+        if provider_model.startswith("inference/")
+        else provider_model
+    )
+    models_root = cfg.setdefault("models", {})
+    providers_root = models_root.setdefault("providers", {})
+    inference = providers_root.setdefault("inference", {})
+    models_list = inference.get("models")
+    if not isinstance(models_list, list) or not models_list:
+        models_list = [{}]
+        inference["models"] = models_list
+    first = models_list[0]
+    if not isinstance(first, dict):
+        first = {}
+        models_list[0] = first
+    first["id"] = bare
+    first["name"] = provider_model
 with open(config_file, "w") as f:
     json.dump(cfg, f, indent=2)
 PYRECONCILE_WRITE
