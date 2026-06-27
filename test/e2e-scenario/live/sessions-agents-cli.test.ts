@@ -22,6 +22,7 @@ import { validateSandboxName } from "../fixtures/clients/sandbox.ts";
 import { expect, test } from "../fixtures/e2e-test.ts";
 import { shouldRunLiveE2EScenarios } from "../fixtures/live-project-gate.ts";
 import type { ShellProbeResult } from "../fixtures/shell-probe.ts";
+import { parseJsonFromText } from "./json-envelope.ts";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const CLI_ENTRYPOINT = path.join(REPO_ROOT, "bin", "nemoclaw.js");
@@ -50,10 +51,6 @@ type CommandOptions = {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function stripAnsi(value: string): string {
-  return value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 function commandEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -176,21 +173,6 @@ function isPreContractEndpointValidationRateLimit(result: ShellProbeResult): boo
 
 function tailEvidence(text: string, maxLength = 2_000): string {
   return text.length > maxLength ? text.slice(-maxLength) : text;
-}
-
-function parseJsonFromText(raw: string): unknown {
-  const text = stripAnsi(raw);
-  let cursor = 0;
-  for (const lineWithBreak of text.match(/^.*(?:\r?\n|$)/gm) ?? []) {
-    const line = lineWithBreak.replace(/\r?\n$/, "");
-    const trimmed = line.trimStart();
-    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-      const offset = cursor + line.length - trimmed.length;
-      return JSON.parse(text.slice(offset));
-    }
-    cursor += lineWithBreak.length;
-  }
-  throw new Error("no JSON object or array found");
 }
 
 function parseJsonEnvelope(result: ShellProbeResult, label: string): unknown {
