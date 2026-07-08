@@ -651,7 +651,6 @@ describe("LangChain Deep Agents Code managed package patch", () => {
       const source = fs.readFileSync(path.join(packageDir, relativePath), "utf8");
       expect(source.match(/NemoClaw-managed Deep Agents Code hardening v2\./g)).toHaveLength(1);
     }
-
     const main = fs.readFileSync(path.join(packageDir, "main.py"), "utf8");
     for (const expected of [
       'args.sandbox = "none"',
@@ -1154,7 +1153,7 @@ spec.loader.exec_module(progressive_disclosure_harness)
 progressive_disclosure_harness._install_stubs()
 
 from deepagents_code import agent, app, auth_store, config, hooks, main as dcode_main, model_config, non_interactive, server, subagents, update_check
-from deepagents_code import _nemoclaw_managed
+from deepagents_code import _nemoclaw_managed, nemoclaw_observability
 from deepagents_code import config_manifest
 from deepagents_code.integrations import openai_codex
 from deepagents_code.widgets.auth import AuthManagerScreen, AuthPromptScreen, AuthResult
@@ -1165,6 +1164,7 @@ from types import SimpleNamespace
 
 
 async def validate():
+    assert nemoclaw_observability.initialize_observability() is False
     instance = app.DeepAgentsApp()
     for command in (
         "/update",

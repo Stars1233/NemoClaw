@@ -329,6 +329,7 @@ describe("LangChain Deep Agents Code image contracts", () => {
     }
     for (const s of [
       "managed-dcode-runtime.py",
+      "nemoclaw_observability.py",
       "patch-managed-deepagents-code.py",
       "DEEPAGENTS_CODE_LANGSMITH_TRACING=false",
       "LANGSMITH_TRACING=false",
@@ -351,6 +352,11 @@ describe("LangChain Deep Agents Code image contracts", () => {
     expect(dockerfile).toContain(
       "rm -f /opt/nemoclaw-deepagents-code/validate-progressive-tool-disclosure.py",
     );
+    expect(dockerfile).toContain("COPY agents/langchain-deepagents-code/validate-observability.py");
+    expect(dockerfile).toContain(
+      "/opt/venv/bin/python3 -I /opt/nemoclaw-deepagents-code/validate-observability.py",
+    );
+    expect(dockerfile).toContain("rm -f /opt/nemoclaw-deepagents-code/validate-observability.py");
     expect(dockerfile).toContain("ARG NEMOCLAW_TOOL_DISCLOSURE=progressive");
     expect(dockerfile).toContain("NEMOCLAW_TOOL_DISCLOSURE=${NEMOCLAW_TOOL_DISCLOSURE}");
     expect(dockerfile).toContain("progressive|direct)");
@@ -656,6 +662,7 @@ describe("LangChain Deep Agents Code image contracts", () => {
       "test/e2e/e2e-cloud-experimental/checks/08-deepagents-code-secret-boundary.sh",
       "test/e2e/e2e-cloud-experimental/checks/09-deepagents-code-tavily-opt-in.sh",
       "test/e2e/e2e-cloud-experimental/checks/10-deepagents-code-tui-startup.sh",
+      "test/e2e/e2e-cloud-experimental/checks/11-deepagents-code-observability.sh",
     ]);
   });
 
@@ -785,6 +792,7 @@ describe("LangChain Deep Agents Code image contracts", () => {
     expect(baseDockerfile).not.toContain("deepagents-code[nvidia]==${DEEPAGENTS_CODE_VERSION}");
     expect(requirementsLock).toContain("uv==0.11.15 \\");
     expect(requirementsLock).toContain("deepagents-code==0.1.30 \\");
+    expect(requirementsLock).toContain("nemo-relay==0.4.0 \\");
     expect(requirementsLock).toContain("langchain-nvidia-ai-endpoints==1.4.3 \\");
     expect(requirementsLock).toContain("aiohttp==3.14.1 \\");
     expect(requirementsLock).toContain("langchain-nvidia-ai-endpoints==");
@@ -795,10 +803,10 @@ describe("LangChain Deep Agents Code image contracts", () => {
     const review = readAgentFile("dependency-review.md");
 
     expect(review).toContain("requirements.lock");
-    expect(review).toContain("229efec862ec10e6b128525e95c8fb8b44cdef8285a6cee78e3a7c73af780a9b");
-    expect(review).toContain("Audit date: 2026-07-03");
+    expect(review).toContain("6fde7b3188137ab5669898a552d5b12c7def2560cb4c861e8ed3563d35a5bcb9");
+    expect(review).toContain("Audit date: 2026-07-06");
     expect(review).toContain(
-      "uvx --python 3.13 pip-audit -r agents/langchain-deepagents-code/requirements.lock --progress-spinner off",
+      "uv tool run --python 3.13 pip-audit -r agents/langchain-deepagents-code/requirements.lock --progress-spinner off",
     );
     expect(review).toContain("No known vulnerabilities found");
   });
